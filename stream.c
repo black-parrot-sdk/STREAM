@@ -40,12 +40,13 @@
 /*     program constitutes acceptance of these licensing restrictions.   */
 /*  5. Absolutely no warranty is expressed or implied.                   */
 /*-----------------------------------------------------------------------*/
-# include <stdio.h>
 # include <unistd.h>
 # include <math.h>
 # include <float.h>
 # include <limits.h>
 # include <sys/time.h>
+#include "bp_utils.h"
+#include "printf.h"
 
 /*-----------------------------------------------------------------------
  * INSTRUCTIONS:
@@ -91,7 +92,7 @@
  *          per array.
  */
 #ifndef STREAM_ARRAY_SIZE
-#   define STREAM_ARRAY_SIZE	10000000
+#   define STREAM_ARRAY_SIZE	20000
 #endif
 
 /*  2) STREAM runs each kernel "NTIMES" times and reports the *best* result
@@ -109,7 +110,7 @@
 #endif
 #endif
 #ifndef NTIMES
-#   define NTIMES	10
+#   define NTIMES	2
 #endif
 
 /*  Users are allowed to modify the "OFFSET" variable, which *may* change the
@@ -193,7 +194,7 @@ static double	bytes[4] = {
     3 * sizeof(STREAM_TYPE) * STREAM_ARRAY_SIZE
     };
 
-extern double mysecond();
+extern uint64_t mysecond();
 extern void checkSTREAMresults();
 #ifdef TUNED
 extern void tuned_STREAM_Copy();
@@ -207,7 +208,7 @@ extern int omp_get_num_threads();
 int
 main()
     {
-    int			quantum, checktick();
+    double		quantum, checktick();
     int			BytesPerWord;
     int			k;
     ssize_t		j;
@@ -273,20 +274,15 @@ main()
 
     printf(HLINE);
 
-    if  ( (quantum = checktick()) >= 1) 
+    quantum = checktick();
 	printf("Your clock granularity/precision appears to be "
-	    "%d microseconds.\n", quantum);
-    else {
-	printf("Your clock granularity appears to be "
-	    "less than one microsecond.\n");
-	quantum = 1;
-    }
+	    "%f microseconds.\n", quantum);
 
     t = mysecond();
 #pragma omp parallel for
     for (j = 0; j < STREAM_ARRAY_SIZE; j++)
 		a[j] = 2.0E0 * a[j];
-    t = 1.0E6 * (mysecond() - t);
+    t = (mysecond() - t) * quantum;
 
     printf("Each test below will take on the order"
 	" of %d microseconds.\n", (int) t  );
@@ -364,10 +360,10 @@ main()
 		avgtime[j] = avgtime[j]/(double)(NTIMES-1);
 
 		printf("%s%12.1f  %11.6f  %11.6f  %11.6f\n", label[j],
-	       1.0E-06 * bytes[j]/mintime[j],
-	       avgtime[j],
-	       mintime[j],
-	       maxtime[j]);
+	       bytes[j]/(mintime[j] * quantum),
+	       avgtime[j] * quantum * 1.0E-06,
+	       mintime[j] * quantum * 1.0E-06,
+	       maxtime[j] * quantum * 1.0E-06);
     }
     printf(HLINE);
 
@@ -375,56 +371,54 @@ main()
     checkSTREAMresults();
     printf(HLINE);
 
+	bp_finish(0);
     return 0;
 }
 
 # define	M	20
 
-int
+double
 checktick()
     {
-    int		i, minDelta, Delta;
-    double	t1, t2, timesfound[M];
+		int		i;
+		double 	minDelta, Delta;
+		uint64_t t1, t2, timesfound[M];
 
-/*  Collect a sequence of M unique time values from the system. */
+		/*  Collect a sequence of M unique time values from the system. */
+		/*  BlackParrot: assuming a frequency of 1GHz:
+		*  	mtime is updated every 8 ticks
+		* 		mtime frequence is 128Mhz - 128 ticks per microsecond.
+		*/
 
-    for (i = 0; i < M; i++) {
-	t1 = mysecond();
-	while( ((t2=mysecond()) - t1) < 1.0E-6 )
-	    ;
-	timesfound[i] = t1 = t2;
-	}
+		for (i = 0; i < M; i++) {
+		t1 = mysecond();
+		while( ((t2=mysecond()) - t1) < 128)
+			;
+		timesfound[i] = t1 = t2;
+		}
 
-/*
- * Determine the minimum difference between these M values.
- * This result will be our estimate (in microseconds) for the
- * clock granularity.
- */
+		/*
+		* Determine the minimum difference between these M values.
+		* This result will be our estimate (in microseconds) for the
+		* clock granularity.
+		*/
 
-    minDelta = 1000000;
-    for (i = 1; i < M; i++) {
-	Delta = (int)( 1.0E6 * (timesfound[i]-timesfound[i-1]));
-	minDelta = MIN(minDelta, MAX(Delta,0));
-	}
+		// Minimum delta between two clock ticks is 7.8125 nanoseconds
+		minDelta = 1 / 128.0;
+		for (i = 1; i < M; i++) {
+		Delta = (double)((timesfound[i]-timesfound[i-1]) / 128.0);
+		minDelta = MIN(minDelta, MAX(Delta,0));
+		}
 
-   return(minDelta);
+		return(minDelta);
     }
 
 
 
-/* A gettimeofday routine to give access to the wall
-   clock timer on most UNIX-like systems.  */
-
-#include <sys/time.h>
-
-double mysecond()
-{
-        struct timeval tp;
-        struct timezone tzp;
-        int i;
-
-        i = gettimeofday(&tp,&tzp);
-        return ( (double) tp.tv_sec + (double) tp.tv_usec * 1.e-6 );
+/* read time from the mtime register - this has sub-microsecond precision. */
+volatile uint64_t* mtime_mmio = (uint64_t*) 0x30bff8;
+uint64_t mysecond() {
+        return *mtime_mmio;
 }
 
 #ifndef abs
