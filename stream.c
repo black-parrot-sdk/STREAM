@@ -92,7 +92,7 @@
  *          per array.
  */
 #ifndef STREAM_ARRAY_SIZE
-#   define STREAM_ARRAY_SIZE	20000
+#   define STREAM_ARRAY_SIZE	16000
 #endif
 
 /*  2) STREAM runs each kernel "NTIMES" times and reports the *best* result
@@ -174,7 +174,7 @@
 # endif
 
 #ifndef STREAM_TYPE
-#define STREAM_TYPE double
+#define STREAM_TYPE long
 #endif
 
 static STREAM_TYPE	a[STREAM_ARRAY_SIZE+OFFSET],
